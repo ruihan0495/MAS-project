@@ -16,7 +16,7 @@ class MinorGameEnv(gym.Env):
         self.num_agents = 2*k+1
         self.action_space = spaces.Discrete(2)
         self.observation_space = spaces.Box(low=0, high=1,
-                                 shape=(self.num_agents-1,2),
+                                 shape=(self.num_agents,2),
                                  dtype=np.float32)
         self.action_list = np.array([0] * self.num_agents)
         self.reward_list = np.array([0] * self.num_agents)
@@ -33,29 +33,22 @@ class MinorGameEnv(gym.Env):
         else:
             self.reward_list[agent_id] = 0
 
-    def get_observation(self, agent_id):
-        obs = np.zeros((self.num_agents-1,2),dtype=np.float32)
-        index = 0
+    def get_observation(self):
+        obs = np.zeros((self.num_agents,2),dtype=np.float32)
         for i in range(self.num_agents):
-            if i != agent_id:
-                obs[index,:] = [self.action_list[i],self.reward_list[i]]
-                index += 1 
+            obs[index,:] = [self.action_list[i],self.reward_list[i]]
         return obs
 
     def step(self, action_n):
-        total_obs = np.zeros((self.num_agents, self.num_agents-1, 2), dtype=np.float32)
         # update actions together
         for agent_id in range(self.num_agents):
             self.action_list[agent_id] = action_n[agent_id]
         # update rewards together    
         for agent_id in range(self.num_agents):    
-            self.set_reward(agent_id)
-        # concatenate all observations
-        for agent_id in range(self.num_agents):    
-            next_observation = self.get_observation(agent_id)
-            total_obs[agent_id,:,:] = next_observation
+            self.set_reward(agent_id)    
+        next_observation = self.get_observation()
         reward_list = self.reward_list
-        return reward_list, total_obs
+        return reward_list, next_observation
 
     def reset(self):
         self.action_list = np.array([0] * self.num_agents)
