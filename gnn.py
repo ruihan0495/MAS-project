@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import torch.nn as nn
+import utils
 
 # code adapted from https://github.com/tkipf/c-swm/blob/master/modules.py
 
@@ -29,10 +30,10 @@ class TransitionGNN(torch.nn.Module):
         out = torch.cat([source, target], dim=0)
         return self.node_mlp(out)
 
-    def _get_edge_list_fully_connected(self, num_time_steps, num_agents):
+    def _get_edge_list_fully_connected(self, num_batches, num_agents):
         # Only re-evaluate if necessary (e.g. if batch size changed).
-        if self.edge_list is None or self.num_time_steps != num_time_steps:
-            self.num_time_steps = num_time_steps
+        if self.edge_list is None or self.num_batches != num_batches:
+            self.num_batches = num_batches
 
             # Create fully-connected adjacency matrix for single sample.
             adj_full = torch.ones(num_agents, num_agents)
@@ -41,11 +42,11 @@ class TransitionGNN(torch.nn.Module):
             adj_full -= torch.eye(num_agents)
             self.edge_list = adj_full.nonzero()
 
-            # Copy `num_time_steps` times and add offset.
-            self.edge_list = self.edge_list.repeat(num_time_steps, 1)
+            # Copy `num_batches` times and add offset.
+            self.edge_list = self.edge_list.repeat(num_batches, 1)
             offset = torch.arange(
-                0, num_time_steps * num_agents, num_agents).unsqueeze(-1)
-            offset = offset.expand(num_time_steps, num_agents * (num_agents - 1))
+                0, num_batches * num_agents, num_agents).unsqueeze(-1)
+            offset = offset.expand(num_batches, num_agents * (num_agents - 1))
             offset = offset.contiguous().view(-1)
             self.edge_list += offset.unsqueeze(-1)
 
@@ -56,21 +57,36 @@ class TransitionGNN(torch.nn.Module):
 
     def forward(self, states, action):
        
-        num_time_steps = states.size(0)
+        num_batches = states.size(0)
         num_nodes = states.size(1)
 
-        # states: [num_time_steps (B), num_agents, input_dim]
-        # input_attr: Flatten states tensor to [num_agents, B * input_dim, 1]
-        input_attr = states.permute(1,0,2).view(states.size(0),-1,1)
+        # states: [num_batches (B), num_agents, num_time_steps*input_dim]
 
         if num_nodes > 1:
-            # edge_index: [B * (num_agents*[num_agents-1]), 2] edge list
+            # edge_index: [2, B * (num_agents*[num_agents-1])] edge list
             edge_index = self._get_edge_list_fully_connected(
-                num_time_steps, num_nodes)
+                num_batches, num_nodes)
 
             row, col = edge_index
             node_attr = self._node_model(
-                input_attr[row], input_attr[col])
-        return node_attr.view(num_time_steps, num_nodes, -1)
+                states[:,row,:], states[:,col,:])
+     
+        # also it's better to convert the states into [batch_size, num_agents, time_step*state_dim]        
+        return node_attr.view(num_batches, num_nodes, -1)
 
         
+class PolicyNet():
+    "policy net needs the input from gnn--predicted actions and input states information"
+    def __init__(self, state_dim, hidden_dim, num_agents, time_step, output_dim=1):
+        super(PolicyNet, self).__init__()
+        input_dim = state_dim * time_step * num_agents
+        self.q_net = nn.Sequential(nn.Linear(input_dim, hidden_dim),
+                                   nn.ReLU(), 
+                                   nn.Linear(hidden_dim, output_dim) )
+
+    def forward(self, states):
+        # states have shape [batch_size, input_dim]
+        out = self.q_net(states)
+        out = utils.to_zero_one(out.numpy())  
+        return out
+
