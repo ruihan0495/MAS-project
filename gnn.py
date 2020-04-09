@@ -8,7 +8,7 @@ import utils
 class TransitionGNN(torch.nn.Module):
     """GNN-based transition function."""
     def __init__(self, input_dim, hidden_dim, action_dim, num_agents,
-                output_dim=1,  num_time_steps=5):
+                output_dim,  num_time_steps=4):
         super(TransitionGNN, self).__init__()
 
         self.input_dim = input_dim
@@ -18,16 +18,17 @@ class TransitionGNN(torch.nn.Module):
         self.num_time_steps = num_time_steps
         self.output_dim = output_dim
         self.edge_list = None
-        self.num_time_steps = 0
+       
 
         self.node_mlp = nn.Sequential(
             nn.Linear(num_time_steps * input_dim *2, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, output_dim),
+            nn.Sigmoid()
         )    
 
     def _node_model(self, source, target):
-        out = torch.cat([source, target], dim=0)
+        out = torch.cat((source, target), dim=1)
         return self.node_mlp(out)
 
     def _get_edge_list_fully_connected(self, num_batches, num_agents):
@@ -55,10 +56,10 @@ class TransitionGNN(torch.nn.Module):
 
         return self.edge_list
 
-    def forward(self, states, action):
+    def forward(self, states):
        
-        num_batches = states.size(0)
-        num_nodes = states.size(1)
+        num_batches = states.shape[0]
+        num_nodes = states.shape[1]
 
         # states: [num_batches (B), num_agents, num_time_steps*input_dim]
 
@@ -68,10 +69,12 @@ class TransitionGNN(torch.nn.Module):
                 num_batches, num_nodes)
 
             row, col = edge_index
+            sender = torch.tensor(states[:,row,:].reshape((-1, self.num_time_steps*self.input_dim)))
+            receiver = torch.tensor(states[:,col,:].reshape((-1, self.num_time_steps*self.input_dim)))
             node_attr = self._node_model(
-                states[:,row,:], states[:,col,:])
+                sender, receiver)
      
-        # also it's better to convert the states into [batch_size, num_agents, time_step*state_dim]        
+        # also it's better to convert the states into [batch_size, num_agents, time_step*out_dim]        
         return node_attr.view(num_batches, num_nodes, -1)
 
         

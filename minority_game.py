@@ -36,7 +36,7 @@ class MinorGameEnv(gym.Env):
     def get_observation(self):
         obs = np.zeros((self.num_agents,2),dtype=np.float32)
         for i in range(self.num_agents):
-            obs[index,:] = [self.action_list[i],self.reward_list[i]]
+            obs[i,:] = [self.action_list[i],self.reward_list[i]]
         return obs
 
     def step(self, action_n):
