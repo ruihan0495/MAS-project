@@ -1,49 +1,54 @@
 import torch
 import torch.nn as nn
+import random
 import numpy as np
-import minority_game
-import utils
+from collections import namedtuple
+from itertools import count
+from dqn import DQN, ReplayMemory
+from model import GNNSelect
 import argparse
-from collections import deque
+
+BATCH_SIZE = 128
+GAMMA = 0.999
+EPS_START = 0.9
+EPS_END = 0.05
+EPS_DECAY = 200
+TARGET_UPDATE = 10
+CONT_PROP = 0.95 #probability of continue play game 
+NUM_AGENTS = 4
+
+
+#TODO: define model, compound net with GNN+Q_NET
+
+def single_train(model, env, num_episodes,agents, h=1):
+    # agents is a list of agent
+    for j in range(num_episodes):
+        rand_num = random.random()
+        #counter = 0
+        if rand_num < CONT_PROP:
+            action = []
+            partners = []
+            for i in range(NUM_AGENTS):
+                # collect past h actions
+                curr_agent = agents[i]
+                #if counter < h:
+                action_n = nn.functional.one_hot(torch.randint(2,(3,)), num_classes=2)
+                curr_agent.remember(action_n)
+                s_i= curr_agent.state()
+                a_d = model.qnet(s_i) # assume a_d is one_hot??? need to check how to cast float tensor to one-hot tensor while differentiable
+                curr_agent.remember(a_d)
+                next_s = curr_agent.state()
+                action.append(a_d)
+                # add s_i, a_d, s_i' to replay buffer
+                curr_agent.replay.push((s_i,a_d,next_s))
+
+
+
+
+
+
 
 '''
-implement the a2c baseline here
-'''
-
-class A2C(nn.Module):
-    def __init__(self, state_dim, hidden_dim, action_dim, num_time_steps):
-        super(A2C, self).__init__()
-        state_dim = state_dim*num_time_steps
-        self.num_agents = 5
-        self.num_time_steps = num_time_steps
-        self.actor = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, action_dim),
-            nn.Sigmoid()
-        )
-
-        self.critic = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
-        )
-
-    def forward(self, input):
-        policy_dist = self.actor(input)
-        state_value = self.critic(input)
-        return policy_dist, state_value 
-
-    def select_action(self, actions, policy_dist, epsilon=0.05):
-        # apply epsilon-greedy action selection
-        is_random = np.random.rand()
-        if is_random > epsilon:
-            action = np.argmax(policy_dist.detach().numpy())    
-        else:
-            action = actions.sample()
-        return action
-
-
 def single_train(model, env, rollout_length, actor_lr, critic_lr, entropy_reg, gamma=0.2):    
     state_i = env.get_observation()   
     loss_fn = nn.MSELoss()
@@ -73,7 +78,7 @@ def single_train(model, env, rollout_length, actor_lr, critic_lr, entropy_reg, g
             next_action = model.select_action(env.action_space, dist)
             env.action_list[0] = next_action
             rewards, state_i = env.step(env.action_list)
-            # state_i has shape[num_agents, state_dim]
+            # state_i has shape[num_agents, num_actions]
             hor_state_i = np.reshape(state_i,(1,-1))
             temp_aug_state = np.vstack((aug_state, hor_state_i))
             temp_aug_state = temp_aug_state[1:,:]
@@ -139,7 +144,7 @@ def multi_train(model, env, num_agents, rollout_length, actor_lr, critic_lr, ent
                 env.action_list[i] = next_action
             rewards, state_i = env.step(env.action_list)
             #total_r.append(rewards)
-            # state_i has shape[num_agents, state_dim]
+            # state_i has shape[num_agents, num_actions]
             hor_state_i = np.reshape(state_i,(1,-1))
             temp_aug_state = np.vstack((aug_state, hor_state_i))
             temp_aug_state = temp_aug_state[1:,:]
@@ -160,7 +165,7 @@ def multi_train(model, env, num_agents, rollout_length, actor_lr, critic_lr, ent
                 critic_losses[i].backward()
                 actor_optimizers[i].step()
                 critic_optimizers[i].step()
-
+'''
 
 parser = argparse.ArgumentParser()
 
@@ -186,6 +191,4 @@ if __name__ == "__main__":
     model = A2C(2,6,2,5) 
     models = [model]*num_agents
     #single_train(model, env, roll_len, actor_lr, critic_lr, entropy_reg)
-    multi_train(models, env, 5, roll_len, actor_lr, critic_lr, entropy_reg)            
-            
-
+    multi_train(models, env, 5, roll_len, actor_lr, critic_lr, entropy_reg)  
