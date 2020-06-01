@@ -12,13 +12,13 @@ class GNNSelect(nn.Module):
         self.num_agents = total_agent
         self.edge_types = [0,1] # 0 not selected, 1 selected
         self.edge_list = None
-        input_dim = 2 * past_steps * 2 + 2
+        input_dim = 2 * past_steps * (self.num_agents-1) * 2 + 2
         self.num_batches = batch_size
         #self.node_mlp = nn.Sequential()
         self.edge_mlp = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.Sigmoid(),
-            nn.Linear(hidden_dim, 2)
+            nn.Linear(hidden_dim, 1) # Just output the probability of being selected
         )
 
     def _get_edge_list_fully_connected(self, num_batches, num_agents):
@@ -49,16 +49,18 @@ class GNNSelect(nn.Module):
     def get_rel(self, row, col, rel):
         # Return a 2-dimentional one-hot vector
         type_id = rel[row,col].long()
-        print(type_id)
+        #print(type_id)
         return nn.functional.one_hot(type_id, num_classes=2)
 
     def forward(self, rel, input):
-        # Input has shape [num_agents-1, 2, h] assume batchsize=1
+        # Input has shape [num_agents, num_agents-1, 2, h] assume batchsize=1
         edge_index = self._get_edge_list_fully_connected(1,self.num_agents)
         row, col = edge_index
-        sender = input[row,:,:]
-        receiver = input[col,:,:]
+        #print(row, col)
+        sender = input[row,:,:,:].reshape(-1,(self.num_agents-1)*2, 1) # assume h=1
+        receiver = input[col,:,:,:].reshape(-1,(self.num_agents-1)*2, 1) # assume h=1
         etype = self.get_rel(row, col, rel).float().unsqueeze(-1)
+        #print('sender shape, receiver shape, etype shape:', sender.shape, receiver.shape, etype.shape)
         edge = torch.cat((sender, receiver, etype),1)
         rel = self.edge_mlp(edge.squeeze())
         return rel
@@ -67,7 +69,7 @@ class GNNSelect(nn.Module):
 # Test sample usage
 def main():
     model = GNNSelect(4,1,6,1)
-    input = torch.tensor([[0.,1.],[1.,0.],[1.,0.],[0.,1.]]).unsqueeze(-1)
+    input = torch.rand((4,3,2,1))
     rel = torch.empty(4, 4).random_(2)
     rel = model.forward(rel,input)
     print(rel)

@@ -1,194 +1,156 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import random
 import numpy as np
-from collections import namedtuple
+
 from itertools import count
-from dqn import DQN, ReplayMemory
+from dqn import DQN
 from model import GNNSelect
+from prisoner_env import Agent, PrisonerEnv
 import argparse
 
-BATCH_SIZE = 128
-GAMMA = 0.999
-EPS_START = 0.9
-EPS_END = 0.05
-EPS_DECAY = 200
-TARGET_UPDATE = 10
-CONT_PROP = 0.95 #probability of continue play game 
 NUM_AGENTS = 4
+BATCH_SIZE = 16
+CONT_PROP = 0.95  
+GAMMA = 0.99
+
+class CoumpoundNet(nn.Module):
+    def __init__(self, num_agents, num_actions, num_time_steps, hidden_dim1, hidden_dim2):
+        super(CoumpoundNet, self).__init__()
+        self.qnet = DQN(num_agents, num_actions, hidden_dim1, num_time_steps)
+        self.gnn = GNNSelect(num_agents, num_time_steps, hidden_dim2, BATCH_SIZE)
+   
+
+'''a function to compute input for gnn when h=1'''
+def concate_states(actions):
+    #print('Actions:',actions)
+    num_agents = len(actions)
+    all_states = torch.zeros(num_agents,num_agents-1,2)
+    with torch.no_grad():
+        for i in range(num_agents):
+            if i == 0:
+                ns_i = actions[1:]
+            elif i == num_agents-1:
+                ns_i = actions[0:-1]
+            else:
+                ns_i = actions[0:i]+actions[i+1:]
+            temp = torch.Tensor(num_agents-1,2)
+            #print('first ns_i:',ns_i)
+            ns_i = torch.cat(ns_i, out=temp).reshape(temp.shape) 
+            #print(ns_i)
+            #print(all_states.shape, ns_i.shape)
+            all_states[i,:,:] = ns_i.squeeze()
+        return all_states
+
+# TODO: Define another function that similar to concate_state but record h steps    
 
 
-#TODO: define model, compound net with GNN+Q_NET
+def train(model, lr, env, num_episodes,agents, h=1):
+    optimizers = [None] * len(agents)
+    for i in range(len(agents)):
 
-def single_train(model, env, num_episodes,agents, h=1):
-    # agents is a list of agent
+        optimizers[i] = torch.optim.Adam(model[i].parameters(), lr)
+
+    # Agents is a list of agent
     for j in range(num_episodes):
         rand_num = random.random()
         #counter = 0
         if rand_num < CONT_PROP:
             action = []
-            partners = []
+            #partners = []
             for i in range(NUM_AGENTS):
-                # collect past h actions
+                # Collect past h actions
                 curr_agent = agents[i]
                 #if counter < h:
-                action_n = nn.functional.one_hot(torch.randint(2,(3,)), num_classes=2)
+                action_n = nn.functional.one_hot(torch.randint(2,(1,)), num_classes=2)
                 curr_agent.remember(action_n)
                 s_i= curr_agent.state()
-                a_d = model.qnet(s_i) # assume a_d is one_hot??? need to check how to cast float tensor to one-hot tensor while differentiable
+                # Convert to type float
+                s_i = s_i.type(torch.FloatTensor)
+                #print('input shape is:', s_i.shape)
+                q_val = model[i].qnet(s_i) 
+                a_d = model[i].qnet.select_action(q_val)
+                #print('output shape of a_d:', a_d.shape)
                 curr_agent.remember(a_d)
                 next_s = curr_agent.state()
                 action.append(a_d)
-                # add s_i, a_d, s_i' to replay buffer
-                curr_agent.replay.push((s_i,a_d,next_s))
+                # Add s_i, a_d, s_i' to replay buffer
+                curr_agent.replay.push([s_i,a_d,next_s,None])
+            all_states = concate_states(action)  
 
+            for i in range(NUM_AGENTS):
+                # Collect states for all other agents excludes itself
+                # ns_i has shape [num_agents, num_agents-1, 2, h=1]
+                ns_i = all_states.unsqueeze(-1)
+                rel = torch.empty(4, 4).random_(2)
+                logits = model[i].gnn(rel, ns_i)
+                #print('logits has shape:', logits.shape)
+                interval = model[i].gnn.num_agents-1
+                a_s = F.gumbel_softmax(logits=logits[i*interval:(i+1)*interval,:], hard=True, dim=1) 
+                partner = agents[torch.argmax(a_s)]
+                env.set_agents(agents[i],partner)
+                reward = env.step()
+                agents[i].replay.add_reward(torch.tensor(reward))
+                #print('the replay buffer is:', np.array(agents[i].replay.sample(BATCH_SIZE)).shape)
+                batch_replay = np.array(agents[i].replay.sample(BATCH_SIZE))
+                #print(batch_replay[:,-1])
+                batched_next_s, batched_reward = torch.stack(list(batch_replay[:,-2])), torch.stack(list(batch_replay[:,-1]))
+                batched_next_s = batched_next_s.reshape(-1,1,2)
+                #print(batched_next_s, batched_next_s.shape, batched_reward)
+                target = batched_reward + GAMMA*torch.max(model[i].qnet(batched_next_s))
+                batched_s = torch.stack(list(batch_replay[:,0]))
+                curr_qval = model[i].qnet(batched_s).squeeze()
+                loss = F.mse_loss(curr_qval, target)
+                optimizers[i].zero_grad()
+                loss.backward(retain_graph=True)
+                optimizers[i].step()
 
-
-
-
-
-
-'''
-def single_train(model, env, rollout_length, actor_lr, critic_lr, entropy_reg, gamma=0.2):    
-    state_i = env.get_observation()   
-    loss_fn = nn.MSELoss()
-    states_so_far = deque()
-    aug_states_so_far = deque()
-    actor_optimizer = torch.optim.Adam(model.parameters(),lr=actor_lr)
-    critic_optimizer = torch.optim.Adam(model.parameters(),lr=critic_lr)
-    for i in range(rollout_length):
-        states_so_far.append(state_i)
-        if i < model.num_time_steps:
-            action_n = utils.random_action(model.num_agents)
-            rewards, state_i = env.step(action_n)
-            print(len(states_so_far))   
-        # concat frames in past k time steps
-        else:
-            j = 1
-            aug_state = states_so_far[i]
-            while j < model.num_time_steps:
-                aug_state = np.hstack((aug_state, states_so_far[i-j]))
-                j+=1
-            aug_states_so_far.append(aug_state)
-            # feed into network
-            input = torch.tensor(aug_state[np.newaxis,:,:])           
-            dist, value = model(input)
-            print("The predicted policy distribution is: {}".format(dist.data))
-            # sample next action
-            next_action = model.select_action(env.action_space, dist)
-            env.action_list[0] = next_action
-            rewards, state_i = env.step(env.action_list)
-            # state_i has shape[num_agents, num_actions]
-            hor_state_i = np.reshape(state_i,(1,-1))
-            temp_aug_state = np.vstack((aug_state, hor_state_i))
-            temp_aug_state = temp_aug_state[1:,:]
-            input = torch.tensor(temp_aug_state)
-            _, next_value = model(input)
-            # train network
-            actor_optimizer.zero_grad()
-            critic_optimizer.zero_grad()
- 
-            log_probs = torch.sum(torch.log(dist))
-            advantange = torch.tensor(rewards) +  gamma*next_value - value
-            entropy = torch.sum(-torch.mean(dist)*torch.log(dist))
-            actor_loss =torch.mean(log_probs*advantange) + entropy_reg*entropy            
-            critic_loss = loss_fn(torch.tensor(rewards).unsqueeze(1)+next_value, value.view(-1,1))
-    
-            actor_loss.backward(retain_graph=True)
-            critic_loss.backward()
-            actor_optimizer.step()
-            critic_optimizer.step()
-
-
-def multi_train(model, env, num_agents, rollout_length, actor_lr, critic_lr, entropy_reg, gamma=0.2):
-    state_i = env.get_observation()   
-    loss_fn = nn.MSELoss()
-    states_so_far = deque()
-    aug_states_so_far = deque()
-    # instantiate a list of optimizers
-    actor_optimizers = [0]*num_agents
-    critic_optimizers = [0]*num_agents
-    actor_losses = [0]*num_agents
-    critic_losses = [0]*num_agents
-    dists=[]
-    values=[]
-    #total_r = []
-    for i in range(num_agents):
-        actor_optimizers[i] = torch.optim.Adam(model[i].parameters(),lr=actor_lr)
-        critic_optimizers[i] = torch.optim.Adam(model[i].parameters(),lr=critic_lr)
-    for i in range(rollout_length):
-        states_so_far.append(state_i)
-        if i < model[0].num_time_steps:
-            action_n = utils.random_action(model[0].num_agents)
-            rewards, state_i = env.step(action_n)
-            #total_r.append(rewards)
-            print(len(states_so_far))   
-        # concat frames in past k time steps
-        else:
-            j = 1
-            aug_state = states_so_far[i]
-            while j < model[0].num_time_steps:
-                aug_state = np.hstack((aug_state, states_so_far[i-j]))
-                j+=1
-            aug_states_so_far.append(aug_state)
-            # feed into network
-            input = torch.tensor(aug_state[np.newaxis,:,:])
-            for i in range(num_agents):
-                model_i = model[i]           
-                dist, value = model_i(input)
-                dists.append(dist)
-                values.append(value)
-                print("The predicted policy distribution is: {}".format(dist.data))
-                # sample next action
-                next_action = model_i.select_action(env.action_space, dist)
-                env.action_list[i] = next_action
-            rewards, state_i = env.step(env.action_list)
-            #total_r.append(rewards)
-            # state_i has shape[num_agents, num_actions]
-            hor_state_i = np.reshape(state_i,(1,-1))
-            temp_aug_state = np.vstack((aug_state, hor_state_i))
-            temp_aug_state = temp_aug_state[1:,:]
-            input = torch.tensor(temp_aug_state)
-            for i in range(num_agents):
-                model_i = model[i]
-                _, next_value = model_i(input)
-                # train network
-                actor_optimizers[i].zero_grad()
-                critic_optimizers[i].zero_grad()
-    
-                log_probs = torch.sum(torch.log(dists[i]))
-                advantange = torch.tensor(rewards) +  gamma*next_value - values[i]
-                entropy = torch.sum(-torch.mean(dists[i])*torch.log(dists[i]))
-                actor_losses[i] =torch.mean(log_probs*advantange) + entropy_reg*entropy            
-                critic_losses[i] = loss_fn(torch.tensor(rewards).unsqueeze(1)+next_value, values[i].view(-1,1))
-                actor_losses[i].backward(retain_graph=True)
-                critic_losses[i].backward()
-                actor_optimizers[i].step()
-                critic_optimizers[i].step()
-'''
 
 parser = argparse.ArgumentParser()
 
 ## General parameters
-parser.add_argument("--actor_lr", type=float, default=0.001,
-                    help="learning rate for actor")
-parser.add_argument("--critic_lr", type=float, default=0.001,
-                    help="learning rate for critic")
-parser.add_argument("--rollout_len", type=int, default=15,
-                    help="rollout length of each episode")
-parser.add_argument("--entropy_reg", type=float, default=0.1,
-                    help="weight of entropy term in actor loss")    
-                              
+parser.add_argument("--lr", type=float, default=0.001,
+                    help="learning rate ")
+
+#parser.add_argument("num_agents", type=int, default=4,
+#                    help="number of agents in the game") 
+
+#parser.add_argument("batch_size", type=int, default=16,
+#                    help="the training batch size")  
+
+#parser.add_argument("gamma", type=float, default=0.99,
+#                    help="the discount rate when calculate the q_net target")
+
+#parser.add_argument("cont_prop", type=float, default=0.95,
+#                    help="the probability of continue play game in each epsisode")            
+
+                                                           
+
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    roll_len = args.rollout_len
-    actor_lr = args.actor_lr
-    critic_lr = args.critic_lr
-    entropy_reg = args.entropy_reg
-    env = minority_game.MinorGameEnv(2)
-    num_agents = 5
-    model = A2C(2,6,2,5) 
-    models = [model]*num_agents
-    #single_train(model, env, roll_len, actor_lr, critic_lr, entropy_reg)
-    multi_train(models, env, 5, roll_len, actor_lr, critic_lr, entropy_reg)  
+    lr = args.lr
+    #NUM_AGENTS = args.num_agents
+    #BATCH_SIZE = args.batch_size
+    #CONT_PROP = args.cont_prop   
+    #GAMMA = args.gamma
+    #EPS_START = 0.9
+    #EPS_END = 0.05
+    #EPS_DECAY = 200
+
+
+  
+    agent1 = Agent(0,5,1)
+    agent2 = Agent(1,5,1)
+    agent3 = Agent(0,5,1)
+    agent4 = Agent(1,5,1)
+
+    agents = [agent1, agent2, agent3, agent4]
+    model = []
+    reward = {(0,0):[3,3],(0,1):[0,4],(1,0):[4,0],(1,1):[1,1]}
+    env = PrisonerEnv(agent1, agent2, reward)
+    for i in range(len(agents)):
+        model.append(CoumpoundNet(NUM_AGENTS, 2, 1, 32, 16))
+    train(model, lr, env, 3, agents) 
+    print('Done!')

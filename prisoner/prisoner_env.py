@@ -1,26 +1,30 @@
 import torch
-from collections import namedtuple
 import random
 
-Transition = namedtuple('Transition',
-                        ('state', 'action', 'next_state', 'reward'))
+# each transition is a list with the format of [s,a,s',r]
 
 # Replay buffer from pytorch implementaion
 # https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
-class ReplayMemory(object):
+class ReplayMemory:
     def __init__(self, capacity):
         self.capacity = capacity
         self.memory = []
         self.position = 0
 
-    def push(self, *args):
+    def push(self, args):
         """Saves a transition."""
         if len(self.memory) < self.capacity:
             self.memory.append(None)
-        self.memory[self.position] = Transition(*args)
+        self.memory[self.position] = args
         self.position = (self.position + 1) % self.capacity
 
+    def add_reward(self, reward):
+        curr_index = (self.position - 1) % self.capacity
+        self.memory[curr_index][-1] = reward
+
     def sample(self, batch_size):
+        if batch_size > self.capacity:
+            return self.memory
         return random.sample(self.memory, batch_size)
 
     def __len__(self):
@@ -29,10 +33,11 @@ class ReplayMemory(object):
 
 
 class Agent:
-    def __init__(self, action, h):
+    def __init__(self, action, capacity, h):
         self.action = action
         self.h = h
         self.memory = []
+        self.replay = ReplayMemory(capacity)
     
     def remember(self, action):
         if not isinstance(action, list):
@@ -47,7 +52,7 @@ class Agent:
 
 class PrisonerEnv:
     def __init__(self, agent1, agent2, reward):
-        # reward is a type of dictionary
+        # Reward is a type of dictionary
         self.agent1 = agent1
         self.agent2 = agent2
         self.round_reward = -1
@@ -58,7 +63,11 @@ class PrisonerEnv:
 
     def set_action(self, ac_1, ac_2):
         self.agent1.action = ac_1
-        self.agent2.action = ac_2       
+        self.agent2.action = ac_2    
+
+    def set_agents(self, ag1, ag2):
+        self.agent1 = ag1
+        self.agent2 = ag2     
 
     def step(self):
         ac_1 = self.agent1.action
@@ -75,8 +84,8 @@ class PrisonerEnv:
 # test sample usage
 def main():
     # 0 - cooperate, 1-defect
-    agent1 = Agent(0)
-    agent2 = Agent(1)
+    agent1 = Agent(0,5,1)
+    agent2 = Agent(1,5,1)
     reward = {(0,0):[3,3],(0,1):[0,4],(1,0):[4,0],(1,1):[1,1]}
     env = PrisonerEnv(agent1, agent2, reward)
     env.step()  
