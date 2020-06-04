@@ -3,7 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import random
 import numpy as np
-
+#import seaborn as sns
+import matplotlib.pyplot as plt
 from itertools import count
 from dqn import DQN
 from model import GNNSelect
@@ -46,7 +47,14 @@ def concate_states(actions):
 # TODO: Define another function that similar to concate_state but record h steps    
 
 
+
 def train(model, lr, env, num_episodes,agents, h=1):
+    # For plotting purposes
+    total_coop = []
+    total_mutual_coop = []
+    total_mutual_deft = []
+    total_deft = []
+
     optimizers = [None] * len(agents)
     for i in range(len(agents)):
 
@@ -79,6 +87,11 @@ def train(model, lr, env, num_episodes,agents, h=1):
                 curr_agent.replay.push([s_i,a_d,next_s,None])
             all_states = concate_states(action)  
 
+            num_coop = 0
+            num_mutual_coop = 0
+            num_mutual_deft = 0
+            num_deft = 0
+
             for i in range(NUM_AGENTS):
                 # Collect states for all other agents excludes itself
                 # ns_i has shape [num_agents, num_agents-1, 2, h=1]
@@ -97,6 +110,16 @@ def train(model, lr, env, num_episodes,agents, h=1):
                 #print(batch_replay[:,-1])
                 batched_next_s, batched_reward = torch.stack(list(batch_replay[:,-2])), torch.stack(list(batch_replay[:,-1]))
                 batched_next_s = batched_next_s.reshape(-1,1,2)
+
+                if agents[i].memory[-1]==[[[1,0]]]:
+                    num_coop += 1
+                if agents[i].memory[-1]==[[[1,0]]] and partner.memory[-1]==[[[1,0]]]:
+                    num_mutual_coop += 1
+                elif agents[i].memory[-1]==[[[0,1]]] and partner.memory[-1]==[[[0,1]]]:
+                    num_mutual_deft += 1
+                else:
+                    num_deft += 1 
+
                 #print(batched_next_s, batched_next_s.shape, batched_reward)
                 target = batched_reward + GAMMA*torch.max(model[i].qnet(batched_next_s))
                 batched_s = torch.stack(list(batch_replay[:,0]))
@@ -105,7 +128,27 @@ def train(model, lr, env, num_episodes,agents, h=1):
                 optimizers[i].zero_grad()
                 loss.backward(retain_graph=True)
                 optimizers[i].step()
+        
+        total_coop.append(num_coop)
+        total_mutual_coop.append(num_mutual_coop)
+        total_mutual_deft.append(num_mutual_deft)
+        total_deft.append(num_deft)
 
+    # Plotting  
+    plot1 = plt.figure(1)  
+    plt.plot(total_coop)
+    plt.xlabel('iterations')
+    plt.ylabel('cooperative agents')
+    plt.savefig('figures\plot1.png')
+
+    plot2 = plt.figure(2)
+    plt.plot(total_mutual_coop, color = 'red', label='mutual_coop')
+    plt.plot(total_mutual_deft, color = 'green', label='mutual_defect')
+    plt.plot(total_deft, color='blue', label='defect')
+    plt.ylabel('interactions')
+    plt.xlabel('iterations')
+    plt.legend()
+    plt.savefig('figures\plot2.png')
 
 parser = argparse.ArgumentParser()
 
@@ -152,5 +195,5 @@ if __name__ == "__main__":
     env = PrisonerEnv(agent1, agent2, reward)
     for i in range(len(agents)):
         model.append(CoumpoundNet(NUM_AGENTS, 2, 1, 32, 16))
-    train(model, lr, env, 3, agents) 
+    train(model, lr, env, 2500, agents) 
     print('Done!')
