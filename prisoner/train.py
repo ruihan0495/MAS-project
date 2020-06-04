@@ -15,6 +15,7 @@ NUM_AGENTS = 4
 BATCH_SIZE = 16
 CONT_PROP = 0.95  
 GAMMA = 0.99
+T = 10
 
 class CoumpoundNet(nn.Module):
     def __init__(self, num_agents, num_actions, num_time_steps, hidden_dim1, hidden_dim2):
@@ -63,8 +64,10 @@ def train(model, lr, env, num_episodes,agents, h=1):
     # Agents is a list of agent
     for j in range(num_episodes):
         rand_num = random.random()
+        round_count = 0
         #counter = 0
-        if rand_num < CONT_PROP:
+        while rand_num < CONT_PROP:
+            round_count += 1
             action = []
             #partners = []
             for i in range(NUM_AGENTS):
@@ -128,11 +131,15 @@ def train(model, lr, env, num_episodes,agents, h=1):
                 optimizers[i].zero_grad()
                 loss.backward(retain_graph=True)
                 optimizers[i].step()
+            
+            if round_count >= T:
+                break
         
-        total_coop.append(num_coop)
-        total_mutual_coop.append(num_mutual_coop)
-        total_mutual_deft.append(num_mutual_deft)
-        total_deft.append(num_deft)
+        normalizer = NUM_AGENTS
+        total_coop.append(num_coop/normalizer)
+        total_mutual_coop.append(num_mutual_coop/normalizer)
+        total_mutual_deft.append(num_mutual_deft/normalizer)
+        total_deft.append(num_deft/normalizer)
 
     # Plotting  
     plot1 = plt.figure(1)  
@@ -195,5 +202,5 @@ if __name__ == "__main__":
     env = PrisonerEnv(agent1, agent2, reward)
     for i in range(len(agents)):
         model.append(CoumpoundNet(NUM_AGENTS, 2, 1, 32, 16))
-    train(model, lr, env, 2500, agents) 
+    train(model, lr, env, 250, agents) 
     print('Done!')
