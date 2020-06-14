@@ -65,6 +65,22 @@ class GNNSelect(nn.Module):
         rel = self.edge_mlp(edge.squeeze())
         return rel
 
+# TODO: Define a DQN selection model
+class DQNSelect(nn.Module):
+    def __init__(self, num_agents, past_steps, hidden_dim):
+        super(DQNSelect, self).__init__()
+        self.num_agents = num_agents
+        input_dim = 2 * past_steps * (self.num_agents-1)
+        self.layers = nn.Sequential(
+            nn.Linear(input_dim,hidden_dim),
+            nn.Sigmoid(),
+            nn.Linear(hidden_dim,num_agents)
+        )
+    
+    def forward(self, input):
+        # Input has shape [1, input_dim]
+        return self.layers(input)
+
 
 # Test sample usage
 def main():

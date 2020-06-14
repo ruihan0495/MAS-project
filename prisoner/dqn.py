@@ -21,7 +21,7 @@ class DQN(nn.Module):
         )
 
     def forward(self, input):
-        # Input is a state representation with shape [batch_size=1,h,2]
+        # Input is a state representation with shape [batch_size=1,2*h]
         return self.q_net(input)
 
     def select_action(self, q_val, epsilon=0.05):
@@ -32,7 +32,7 @@ class DQN(nn.Module):
         else:
             act = F.one_hot(torch.arange(0, self.num_actions)).type(torch.FloatTensor)
             rand_idx = np.random.randint(0, self.num_actions)
-            act = act[rand_idx,:].reshape(1, -1, self.num_actions)
+            act = act[rand_idx,:].reshape(-1, self.num_actions)
             #print('explore actioin has shape:', act.shape)
             return act
 
