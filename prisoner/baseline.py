@@ -44,23 +44,38 @@ class CoumpoundNet(nn.Module):
         self.q_select = DQNSelect(num_agents, num_time_steps, hidden_dim2)
 
 def train(model, lr, env, num_episodes, agents, h=1):
-    optimizers = [None] * len(agents)
-    for i in range(len(agents)):
-        optimizers[i] = torch.optim.Adam(model[i].parameters(), lr)
+    # Variables for plotting purpose
+    total_coop = []
+    total_mutual_coop = []
+    total_mutual_deft = []
+    total_deft = []
 
+    game_optimizers = [None] * len(agents)
+    partner_optimizers = [None] * len(agents)
+    for i in range(len(agents)):
+        game_optimizers[i] = torch.optim.Adam(model[i].qnet.parameters(), lr)
+        partner_optimizers[i] = torch.optim.Adam(model[i].q_select.parameters(), lr)
     for j in range(num_episodes):
         rand_num = random.random()
         round_count = 0
+        init_actions = [0] * NUM_AGENTS
+
         while rand_num < CONT_PROP:
             round_count += 1
             action = []
             round_states = []
             round_next_states = []
+
             for i in range(NUM_AGENTS):
-                # This part encode the partner selection phase
+                # This part encode the game playing phase
                 # Collect past h actions
+                init_actions[i] += 1
                 curr_agent = agents[i]
-                action_n = F.one_hot(torch.randint(2,(1,)), num_classes=2)
+                if init_actions[i] <= 1:
+                    action_n = F.one_hot(torch.randint(2,(1,)), num_classes=2)
+                else:
+                    action_n = a_d
+
                 curr_agent.remember(action_n)
                 s_i = curr_agent.state()
                 # Convert to type float
@@ -76,12 +91,11 @@ def train(model, lr, env, num_episodes, agents, h=1):
                 action.append(a_d)
                 round_states.append(s_i)
                 round_next_states.append(next_s) 
-                 
 
-            """ num_coop = 0
+            num_coop = 0
             num_mutual_coop = 0
             num_mutual_deft = 0
-            num_deft = 0 """
+            num_deft = 0    
 
             for i in range(NUM_AGENTS):
                 # Collect states for all other agents excludes itself
@@ -89,7 +103,7 @@ def train(model, lr, env, num_episodes, agents, h=1):
                 ns_i = states_for_i(action, i)
                 logits = model[i].q_select(ns_i)
  
-                a_s = F.gumbel_softmax(logits, hard=True, dim=1) 
+                a_s = model[i].q_select.select_partner(logits)
                 partner = agents[torch.argmax(a_s)]
                 env.set_agents(agents[i],partner)
                 reward = env.step()
@@ -97,29 +111,38 @@ def train(model, lr, env, num_episodes, agents, h=1):
                 agents[i].replay.add(ns_i, a_s, 0, 0, select_phase=True)
             
                 s_state, s_action, s_reward, g_state, g_action, g_next_state, g_reward= agents[i].replay.sample(BATCH_SIZE)
-               
-
-                """ if agents[i].memory[-1]==[[[1,0]]]:
+                #print('agent {}'.format(i), agents[i].memory)  
+                # TODO: FIX THIS PART, THE COUNTING DOESN'T WORK.             
+                if agents[i].memory[-1]== [[1.0,0.0]]:
+                    #print('mark:',agents[i].memory[-1])
                     num_coop += 1
-                if agents[i].memory[-1]==[[[1,0]]] and partner.memory[-1]==[[[1,0]]]:
+                if agents[i].memory[-1]== [[1.0,0.0]] and partner.memory[-1]== [[1.0,0.0]]:
                     num_mutual_coop += 1
-                elif agents[i].memory[-1]==[[[0,1]]] and partner.memory[-1]==[[[0,1]]]:
+                elif agents[i].memory[-1]== [[0.0,1.0]] and partner.memory[-1]== [[0.0,1.0]]:
                     num_mutual_deft += 1
                 else:
-                    num_deft += 1 """ 
+                    num_deft += 1 
 
-                #print(batched_next_s, batched_next_s.shape, batched_reward)
+                # Update target for game playing phase
                 target = g_reward+ GAMMA*torch.max(model[i].qnet(g_next_state))
                 curr_qval = model[i].qnet(g_state).gather(1,g_action.type(torch.LongTensor))
                 loss = F.mse_loss(curr_qval, target)
-                optimizers[i].zero_grad()
+                game_optimizers[i].zero_grad()
                 loss.backward(retain_graph=True)
-                optimizers[i].step()
+                game_optimizers[i].step()
+
+                # Update target for partner selection phase
+                target = s_reward+ GAMMA*torch.max(model[i].qnet(g_state))
+                curr_qval = model[i].q_select(s_state).gather(1,s_action.type(torch.LongTensor))
+                loss = F.mse_loss(curr_qval, target)
+                partner_optimizers[i].zero_grad()
+                loss.backward(retain_graph=True)
+                partner_optimizers[i].step()
             
             if round_count >= T:
                 break
         
-        """ normalizer = NUM_AGENTS
+        normalizer = NUM_AGENTS
         total_coop.append(num_coop/normalizer)
         total_mutual_coop.append(num_mutual_coop/normalizer)
         total_mutual_deft.append(num_mutual_deft/normalizer)
@@ -127,20 +150,21 @@ def train(model, lr, env, num_episodes, agents, h=1):
 
     # Plotting  
     plot1 = plt.figure(1)  
-    plt.plot(total_coop)
+    plt.plot(total_coop, alpha=0.5)
     plt.xlabel('iterations')
     plt.ylabel('cooperative agents')
     plt.savefig('figures\plot1.png')
 
     plot2 = plt.figure(2)
-    plt.plot(total_mutual_coop, color = 'red', label='mutual_coop')
-    plt.plot(total_mutual_deft, color = 'green', label='mutual_defect')
-    plt.plot(total_deft, color='blue', label='defect')
+    plt.plot(total_mutual_coop, color = 'red', alpha = 0.5, label='mutual_coop')
+    plt.plot(total_mutual_deft, color = 'green', alpha = 0.5, label='mutual_defect')
+    plt.plot(total_deft, color='blue', alpha = 0.5, label='defect')
     plt.ylabel('interactions')
     plt.xlabel('iterations')
     plt.legend()
-    plt.savefig('figures\plot2.png') """
-
+    plt.savefig('figures\plot2.png')
+        
+      
 
 
 

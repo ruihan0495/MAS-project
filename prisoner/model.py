@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+import numpy as np
+import torch.nn.functional as F
 '''idea: use gnn to model partner selection phase,
 it should try to predict the edge type. In general,
 there are 2 edge types, i.e. selected and not_selected,
@@ -80,6 +82,17 @@ class DQNSelect(nn.Module):
     def forward(self, input):
         # Input has shape [1, input_dim]
         return self.layers(input)
+
+    def select_partner(self, q_val, epsilon=0.02):
+        # Apply epsilon-greedy action selection
+        is_random = np.random.rand()
+        if is_random > epsilon:
+            return F.gumbel_softmax(logits=q_val, hard=True, dim=1)
+        else:
+            partner = F.one_hot(torch.arange(0, self.num_agents)).type(torch.FloatTensor)
+            rand_idx = np.random.randint(0, self.num_agents)
+            partner = partner[rand_idx,:].reshape(-1, self.num_agents)
+            return partner    
 
 
 # Test sample usage
