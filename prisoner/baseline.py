@@ -15,7 +15,7 @@ import argparse
 # https://www.aaai.org/Papers/AAAI/2020GB/AAAI-AnastassacosN.1598.pdf
 # as a baseline approach
 
-NUM_AGENTS = 4
+NUM_AGENTS = 20
 BATCH_SIZE = 16
 CONT_PROP = 0.95  
 GAMMA = 0.99
@@ -111,10 +111,8 @@ def train(model, lr, env, num_episodes, agents, h=1):
                 agents[i].replay.add(ns_i, a_s, 0, 0, select_phase=True)
             
                 s_state, s_action, s_reward, g_state, g_action, g_next_state, g_reward= agents[i].replay.sample(BATCH_SIZE)
-                #print('agent {}'.format(i), agents[i].memory)  
-                # TODO: FIX THIS PART, THE COUNTING DOESN'T WORK.             
+                #print('agent {}'.format(i), agents[i].memory)              
                 if agents[i].memory[-1]== [[1.0,0.0]]:
-                    #print('mark:',agents[i].memory[-1])
                     num_coop += 1
                 if agents[i].memory[-1]== [[1.0,0.0]] and partner.memory[-1]== [[1.0,0.0]]:
                     num_mutual_coop += 1
@@ -192,18 +190,23 @@ parser.add_argument("--lr", type=float, default=0.001,
 if __name__ == "__main__":
     args = parser.parse_args()
     lr = args.lr
- 
- 
-    agent1 = Agent(0,5,1,2,NUM_AGENTS)
-    agent2 = Agent(1,5,1,2,NUM_AGENTS)
-    agent3 = Agent(0,5,1,2,NUM_AGENTS)
-    agent4 = Agent(1,5,1,2,NUM_AGENTS)
-
-    agents = [agent1, agent2, agent3, agent4]
+    actions = [0, 1]
+    agents = []
+    for i in range(NUM_AGENTS):
+        action = random.choice(actions)
+        agent = Agent(action,5,1,2,NUM_AGENTS)
+        agents.append(agent)
     models = []
     reward = {(0,0):[3,3],(0,1):[0,4],(1,0):[4,0],(1,1):[1,1]}
+   
+    # Random pick 2 different agents to start the game
+    agent1 = random.choice(agents)
+    agent2 = agent1
+    while agent2 == agent1:
+        agent2 = random.choice(agents) 
+
     env = PrisonerEnv(agent1, agent2, reward)
     for i in range(len(agents)):
-        models.append(CoumpoundNet(NUM_AGENTS, 2, 1, 32, 16))
-    train(models, lr, env, 250, agents) 
+        models.append(CoumpoundNet(NUM_AGENTS, 2, 1, 256, 256))
+    train(models, lr, env, 2500, agents) 
     print('Done!')   
