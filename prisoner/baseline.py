@@ -10,6 +10,7 @@ from dqn import DQN
 from model import DQNSelect
 from prisoner_env import Agent, PrisonerEnv
 import argparse
+import copy
 
 # This script implement the algorithm in 
 # https://www.aaai.org/Papers/AAAI/2020GB/AAAI-AnastassacosN.1598.pdf
@@ -41,9 +42,13 @@ class CoumpoundNet(nn.Module):
     def __init__(self, num_agents, num_actions, num_time_steps, hidden_dim1, hidden_dim2):
         super(CoumpoundNet, self).__init__()
         self.qnet = DQN(num_agents, num_actions, hidden_dim1, num_time_steps)
+        # Target network for game playing Q-net
+        self.qnet_target = copy.deepcopy(self.qnet)
         self.q_select = DQNSelect(num_agents, num_time_steps, hidden_dim2)
+        # Target network for partner selection Q-net
+        self.q_select_target = copy.deepcopy(self.q_select)
 
-def train(model, lr, env, num_episodes, agents, h=1):
+def train(model, lr, env, num_episodes, agents, update_freq, h=1):
     # Variables for plotting purpose
     total_coop = []
     total_mutual_coop = []
@@ -121,21 +126,26 @@ def train(model, lr, env, num_episodes, agents, h=1):
                 else:
                     num_deft += 1 
 
-                # Update target for game playing phase
-                target = g_reward+ GAMMA*torch.max(model[i].qnet(g_next_state))
+                # Training Q-net for game playing phase
+                with torch.no_grad():
+                    target = g_reward+ GAMMA*torch.max(model[i].qnet_target(g_next_state))
                 curr_qval = model[i].qnet(g_state).gather(1,g_action.type(torch.LongTensor))
                 loss = F.mse_loss(curr_qval, target)
                 game_optimizers[i].zero_grad()
                 loss.backward(retain_graph=True)
-                game_optimizers[i].step()
+                game_optimizers[i].step()                
 
-                # Update target for partner selection phase
-                target = s_reward+ GAMMA*torch.max(model[i].qnet(g_state))
+                # Training Q-select for partner selection phase
+                with torch.no_grad():
+                    target = s_reward+ GAMMA*torch.max(model[i].qnet_target(g_state))
                 curr_qval = model[i].q_select(s_state).gather(1,s_action.type(torch.LongTensor))
                 loss = F.mse_loss(curr_qval, target)
                 partner_optimizers[i].zero_grad()
                 loss.backward(retain_graph=True)
                 partner_optimizers[i].step()
+                # Update game playing target network
+                if round_count % update_freq == 0:
+                    model[i].qnet_target.load_state_dict(model[i].qnet.state_dict())
             
             if round_count >= T:
                 break
@@ -172,8 +182,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--lr", type=float, default=0.001,
                     help="learning rate ")
 
-#parser.add_argument("num_agents", type=int, default=4,
-#                    help="number of agents in the game") 
+parser.add_argument("--update_freq", type=int, default=5,
+                    help="number of iterations to update the policy network") 
 
 #parser.add_argument("batch_size", type=int, default=16,
 #                    help="the training batch size")  
@@ -190,6 +200,7 @@ parser.add_argument("--lr", type=float, default=0.001,
 if __name__ == "__main__":
     args = parser.parse_args()
     lr = args.lr
+    update_freq = args.update_freq
     actions = [0, 1]
     agents = []
     for i in range(NUM_AGENTS):
@@ -208,5 +219,5 @@ if __name__ == "__main__":
     env = PrisonerEnv(agent1, agent2, reward)
     for i in range(len(agents)):
         models.append(CoumpoundNet(NUM_AGENTS, 2, 1, 256, 256))
-    train(models, lr, env, 2500, agents) 
+    train(models, lr, env, 250, agents, update_freq) 
     print('Done!')   
