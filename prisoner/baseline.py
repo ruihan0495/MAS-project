@@ -123,9 +123,7 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
                 a_d = model[i].qnet.select_action(q_val)
    
                 # Store next states and next actions for each agent
-                # TODO: FIX THIS! a_d is remembered twice! 
-                curr_agent.remember(a_d)
-                next_s = curr_agent.state().type(torch.FloatTensor).reshape(1,-1)
+                next_s = a_d.detach().numpy().reshape(1,-1)
                              
                 action.append(a_d)
                 round_states.append(s_i)
