@@ -67,7 +67,7 @@ class GNNSelect(nn.Module):
         rel = self.edge_mlp(edge.squeeze())
         return rel
 
-# TODO: Define a DQN selection model
+
 class DQNSelect(nn.Module):
     def __init__(self, num_agents, past_steps, hidden_dim):
         super(DQNSelect, self).__init__()
@@ -83,8 +83,8 @@ class DQNSelect(nn.Module):
         # Input has shape [1, input_dim]
         return self.layers(input)
 
-    def select_partner(self, q_val, epsilon=0.02):
-        # Apply epsilon-greedy action selection
+    def select_partner(self, q_val, epsilon=0.01):
+        # Apply epsilon-greedy partner selection
         is_random = np.random.rand()
         if is_random > epsilon:
             return F.gumbel_softmax(logits=q_val, hard=True, dim=1)

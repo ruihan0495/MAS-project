@@ -35,6 +35,11 @@ class ReplayMemory:
 # Another definition for replay memory that is more efficient
 # Code adapted from https://github.com/sfujim/TD3/blob/master/utils.py
 class ReplayMemory:
+    '''
+    A replay buffer, if select_phase is False, then only put the state transitions
+    during game playing phase into the buffer.
+    Otherwise, put the state trainsitions in partner selection phase into the buffer  
+    '''
     def __init__(self, h, action_dim, num_agents, capacity):    
         self.ptr_select_phase = 0
         self.ptr_game_phase = 0
@@ -89,12 +94,13 @@ class Agent:
         self.action = action
         self.h = h
         # Memory is only used to remember last step actions
+        # Memory has length equal to h
         self.memory = []
         # Replay is used to store the trainsitions(s,a,s',r,done)
-        self.replay = ReplayMemory(h, action_dim, num_agents, capacity)
-        #self.replay = ReplayMemory(capacity)
+        self.replay = ReplayMemory(h, action_dim, num_agents, capacity) 
     
     def remember(self, action):
+        # Remember the last action taken
         if not isinstance(action, list):
             action = action.tolist()
         self.memory.append(action)

@@ -14,7 +14,7 @@ import copy
 
 # This script implement the algorithm in 
 # https://www.aaai.org/Papers/AAAI/2020GB/AAAI-AnastassacosN.1598.pdf
-# as a baseline approach
+# as a baseline approach 
 
 NUM_AGENTS = 20
 BATCH_SIZE = 16
@@ -23,6 +23,15 @@ GAMMA = 0.99
 T = 10
 
 def states_for_i(actions, i):
+    '''
+    Args:
+        actions[list] - a list of actions executed for all agents at last time step
+        i[int] - the index of agent
+    Return:
+        the constructed state representation that has shape [1, 2h*(num_agents-1)]
+        for the selection Q-network. This state is the concatenation of the last time step 
+        actions of all other agents exclude agent i    
+    '''
     #print('Actions:',actions)
     num_agents = len(actions)
     with torch.no_grad():
@@ -39,22 +48,43 @@ def states_for_i(actions, i):
         return ns_i
 
 class CoumpoundNet(nn.Module):
+    '''
+    Define a compound network that has 2 sub-networks:
+        A qnet for game playing Q-learning
+        A q_select for partner selection Q-learning
+        A qnet_target to stablize training
+    '''
     def __init__(self, num_agents, num_actions, num_time_steps, hidden_dim1, hidden_dim2):
         super(CoumpoundNet, self).__init__()
         self.qnet = DQN(num_agents, num_actions, hidden_dim1, num_time_steps)
         # Target network for game playing Q-net
         self.qnet_target = copy.deepcopy(self.qnet)
-        self.q_select = DQNSelect(num_agents, num_time_steps, hidden_dim2)
-        # Target network for partner selection Q-net
-        self.q_select_target = copy.deepcopy(self.q_select)
+        self.q_select = DQNSelect(num_agents, num_time_steps, hidden_dim2)       
 
 def train(model, lr, env, num_episodes, agents, update_freq, h=1):
+    '''
+    Args:
+        model[list of CompoundNet] - a list of models, each agent has it's own decision making
+        model
+        lr[float] - learning rate
+        agents[list of agent] - a list of agents
+        update_freq[int] - the frequency to update qnet_target in training
+
+    The training schema is:
+        1. each agent randomly picks action at the very begining until it has enough history
+        to construct game playing state representations, in this case, at least h=1 actions must be taken
+        2. feed the game playing state representation into qnet to select next action for each agent
+        3. construct partner selection state representations for each agent using states_for_i
+        4. feed the partner selection state representation into q_select to get the partner to play with
+        5. the reward is obtained via the interaction of agent and it's selected partner in the environment   
+    '''
     # Variables for plotting purpose
     total_coop = []
     total_mutual_coop = []
     total_mutual_deft = []
     total_deft = []
 
+    # Initialize optimizers for q_net and q_select, in this case, all Adam
     game_optimizers = [None] * len(agents)
     partner_optimizers = [None] * len(agents)
     for i in range(len(agents)):
@@ -63,6 +93,7 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
     for j in range(num_episodes):
         rand_num = random.random()
         round_count = 0
+        # An indicator to count all many random actions for each agent have been picked at beginning
         init_actions = [0] * NUM_AGENTS
 
         while rand_num < CONT_PROP:
@@ -76,11 +107,13 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
                 # Collect past h actions
                 init_actions[i] += 1
                 curr_agent = agents[i]
+                # If initially less then h, act randomly; else the next action is picked by qnet with epsilon-greedy policy
                 if init_actions[i] <= 1:
                     action_n = F.one_hot(torch.randint(2,(1,)), num_classes=2)
                 else:
                     action_n = a_d
 
+                # Each agent remember the last action taken and construct state representation for qnet
                 curr_agent.remember(action_n)
                 s_i = curr_agent.state()
                 # Convert to type float
@@ -89,7 +122,8 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
                 q_val = model[i].qnet(s_i) 
                 a_d = model[i].qnet.select_action(q_val)
    
-                # Store states and actions for agents
+                # Store next states and next actions for each agent
+                # TODO: FIX THIS! a_d is remembered twice! 
                 curr_agent.remember(a_d)
                 next_s = curr_agent.state().type(torch.FloatTensor).reshape(1,-1)
                              
@@ -108,11 +142,15 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
                 ns_i = states_for_i(action, i)
                 logits = model[i].q_select(ns_i)
  
+                # Partner selection
                 a_s = model[i].q_select.select_partner(logits)
                 partner = agents[torch.argmax(a_s)]
+                # Agent i and it's selected partner play against each other in the environment
                 env.set_agents(agents[i],partner)
                 reward = env.step()
+                # Add game playing histories s, a, s', r to the replay buffer 
                 agents[i].replay.add(round_states[i], action[i], round_next_states[i], reward[0])
+                # Add partner selction histories s, a to the replay buffer
                 agents[i].replay.add(ns_i, a_s, 0, 0, select_phase=True)
             
                 s_state, s_action, s_reward, g_state, g_action, g_next_state, g_reward= agents[i].replay.sample(BATCH_SIZE)
