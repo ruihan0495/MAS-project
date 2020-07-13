@@ -47,6 +47,21 @@ def states_for_i(actions, i):
         #print('ns_i',ns_i)
         return ns_i
 
+def onehot_to_int(action1, action2):
+    '''
+    Args:
+        action1, action2[(differentiable) tensor] - tensors of actions taken
+        by agent 1 and agent2 in one-hot format, for example, action1=
+        tensor([[0.,1.]], grad_fn=..) or action1=tensor([[0.,1.]])
+    Return:
+        int version of action1 and action2, that is, tensor([[0.,1.]]) = 1 and
+        tensor([[1.,0.]]) = 0    
+    '''
+    action1 = action1.detach().numpy().argmax()
+    action2 = action2.detach().numpy().argmax()
+    return action1, action2
+
+
 class CoumpoundNet(nn.Module):
     '''
     Define a compound network that has 2 sub-networks:
@@ -82,7 +97,16 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
     total_coop = []
     total_mutual_coop = []
     total_mutual_deft = []
-    total_deft = []
+    total_exploitation = []
+    total_deception = []
+    total_reward = []
+
+    num_coop = 0
+    num_mutual_coop = 0
+    num_mutual_deft = 0
+    num_deception = 0
+    num_exploitation = 0 
+    avg_reward = 0  
 
     # Initialize optimizers for q_net and q_select, in this case, all Adam
     game_optimizers = [None] * len(agents)
@@ -100,7 +124,14 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
             round_count += 1
             action = []
             round_states = []
-            round_next_states = []
+            round_next_states = [] 
+
+            num_coop = 0
+            num_mutual_coop = 0
+            num_mutual_deft = 0
+            num_deception = 0
+            num_exploitation = 0 
+            avg_reward = 0            
 
             for i in range(NUM_AGENTS):
                 # This part encode the game playing phase
@@ -127,12 +158,7 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
                              
                 action.append(a_d)
                 round_states.append(s_i)
-                round_next_states.append(next_s) 
-
-            num_coop = 0
-            num_mutual_coop = 0
-            num_mutual_deft = 0
-            num_deft = 0    
+                round_next_states.append(next_s)            
 
             for i in range(NUM_AGENTS):
                 # Collect states for all other agents excludes itself
@@ -144,7 +170,9 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
                 a_s = model[i].q_select.select_partner(logits)
                 partner = agents[torch.argmax(a_s)]
                 # Agent i and it's selected partner play against each other in the environment
-                env.set_agents(agents[i],partner)
+                env.set_agents(agents[i], partner)
+                act1, act2 = onehot_to_int(action[i], action[torch.argmax(a_s)])
+                env.set_action(act1, act2)           
                 reward = env.step()
                 # Add game playing histories s, a, s', r to the replay buffer 
                 agents[i].replay.add(round_states[i], action[i], round_next_states[i], reward[0])
@@ -155,12 +183,25 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
                 #print('agent {}'.format(i), agents[i].memory)              
                 if agents[i].memory[-1]== [[1.0,0.0]]:
                     num_coop += 1
+
                 if agents[i].memory[-1]== [[1.0,0.0]] and partner.memory[-1]== [[1.0,0.0]]:
                     num_mutual_coop += 1
+                    #env.set_agents(agents[i],partner)
+                    env.set_action(0,0)
+                    avg_reward += env.step()[0]
                 elif agents[i].memory[-1]== [[0.0,1.0]] and partner.memory[-1]== [[0.0,1.0]]:
                     num_mutual_deft += 1
+                    #env.set_agents(agents[i],partner)
+                    env.set_action(1,1)
+                    avg_reward += env.step()[0]
+                elif agents[i].memory[-1]== [[0.0,1.0]] and partner.memory[-1]== [[1.0,0.0]]:
+                    num_exploitation += 1
+                    env.set_action(1,0)
+                    avg_reward += env.step()[0]
                 else:
-                    num_deft += 1 
+                    num_deception += 1 
+                    env.set_action(0,1)
+                    avg_reward += env.step()[0]
 
                 # Training Q-net for game playing phase
                 with torch.no_grad():
@@ -190,7 +231,9 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
         total_coop.append(num_coop/normalizer)
         total_mutual_coop.append(num_mutual_coop/normalizer)
         total_mutual_deft.append(num_mutual_deft/normalizer)
-        total_deft.append(num_deft/normalizer)
+        total_exploitation.append(num_exploitation/normalizer)
+        total_deception.append(num_deception/normalizer)
+        total_reward.append(avg_reward/normalizer)
 
     # Plotting  
     plot1 = plt.figure(1)  
@@ -202,7 +245,9 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
     plot2 = plt.figure(2)
     plt.plot(total_mutual_coop, color = 'red', alpha = 0.5, label='mutual_coop')
     plt.plot(total_mutual_deft, color = 'green', alpha = 0.5, label='mutual_defect')
-    plt.plot(total_deft, color='blue', alpha = 0.5, label='defect')
+    plt.plot(total_deception, color='blue', alpha = 0.5, label='deception')
+    plt.plot(total_exploitation, color='orange', alpha = 0.5, label='exploitation')
+    #plt.plot(total_reward, color='purple', alpha = 0.5, label='total reward')
     plt.ylabel('interactions')
     plt.xlabel('iterations')
     plt.legend()
