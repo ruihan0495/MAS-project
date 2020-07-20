@@ -16,8 +16,7 @@ class DQN(nn.Module):
         self.q_net = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, num_actions),
-            nn.ReLU()
+            nn.Linear(hidden_dim, num_actions)
         )
 
     def forward(self, input):
@@ -28,7 +27,8 @@ class DQN(nn.Module):
         # Apply epsilon-greedy action selection
         is_random = np.random.rand()
         if is_random > epsilon:
-            return F.gumbel_softmax(logits=q_val, hard=True)
+            with torch.no_grad():
+                return F.gumbel_softmax(logits=q_val, hard=True, dim=1)
         else:
             act = F.one_hot(torch.arange(0, self.num_actions)).type(torch.FloatTensor)
             rand_idx = np.random.randint(0, self.num_actions)

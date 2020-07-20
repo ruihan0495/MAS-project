@@ -87,7 +87,8 @@ class DQNSelect(nn.Module):
         # Apply epsilon-greedy partner selection
         is_random = np.random.rand()
         if is_random > epsilon:
-            return F.gumbel_softmax(logits=q_val, hard=True, dim=1)
+            with torch.no_grad():
+                return F.gumbel_softmax(logits=q_val, hard=True, dim=1)
         else:
             partner = F.one_hot(torch.arange(0, self.num_agents)).type(torch.FloatTensor)
             rand_idx = np.random.randint(0, self.num_agents)

@@ -105,8 +105,10 @@ def train(model, lr, env, num_episodes,agents, h=1):
                 interval = model[i].gnn.num_agents-1
                 a_s = F.gumbel_softmax(logits=logits[i*interval:(i+1)*interval,:], hard=True, dim=1) 
                 partner = agents[torch.argmax(a_s)]
+                # Set the action of agents and partners
                 env.set_agents(agents[i],partner)
-                reward = env.step()
+                env.set_action(action[i],action[torch.argmax(a_s)])
+                reward = env.step()[0]
                 agents[i].replay.add_reward(torch.tensor(reward))
                 #print('the replay buffer is:', np.array(agents[i].replay.sample(BATCH_SIZE)).shape)
                 batch_replay = np.array(agents[i].replay.sample(BATCH_SIZE))

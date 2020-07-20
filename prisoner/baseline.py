@@ -21,6 +21,7 @@ BATCH_SIZE = 16
 CONT_PROP = 0.95  
 GAMMA = 0.99
 T = 10
+TAU = 0.005
 
 def states_for_i(actions, i):
     '''
@@ -205,7 +206,7 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
 
                 # Training Q-net for game playing phase
                 with torch.no_grad():
-                    target = g_reward+ GAMMA*torch.max(model[i].qnet_target(g_next_state))
+                    target = g_reward+ GAMMA*torch.max(model[i].qnet_target(g_next_state), dim=1, keepdim=True)[0]   
                 curr_qval = model[i].qnet(g_state).gather(1,g_action.type(torch.LongTensor))
                 loss = F.mse_loss(curr_qval, target)
                 game_optimizers[i].zero_grad()
@@ -214,7 +215,7 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
 
                 # Training Q-select for partner selection phase
                 with torch.no_grad():
-                    target = s_reward+ GAMMA*torch.max(model[i].qnet_target(g_state))
+                    target = s_reward+ GAMMA*torch.max(model[i].qnet_target(g_state), dim=1, keepdim=True)[0]
                 curr_qval = model[i].q_select(s_state).gather(1,s_action.type(torch.LongTensor))
                 loss = F.mse_loss(curr_qval, target)
                 partner_optimizers[i].zero_grad()
@@ -222,7 +223,11 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
                 partner_optimizers[i].step()
                 # Update game playing target network
                 if round_count % update_freq == 0:
-                    model[i].qnet_target.load_state_dict(model[i].qnet.state_dict())
+                    # Polyak target average
+                    for param, target_param in zip(model[i].qnet.parameters(), model[i].qnet_target.parameters()):
+                        target_param.data.copy_(TAU * param.data + (1-TAU) * target_param.data)
+		                
+                    #model[i].qnet_target.load_state_dict(model[i].qnet.state_dict())
             
             if round_count >= T:
                 break
@@ -300,5 +305,5 @@ if __name__ == "__main__":
     env = PrisonerEnv(agent1, agent2, reward)
     for i in range(len(agents)):
         models.append(CoumpoundNet(NUM_AGENTS, 2, 1, 256, 256))
-    train(models, lr, env, 250, agents, update_freq) 
+    train(models, lr, env, 2500, agents, update_freq) 
     print('Done!')   
