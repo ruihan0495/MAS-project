@@ -32,13 +32,10 @@ def train(model, game_lr, select_lr, env, num_episodes, agents, update_freq, h=1
         agents[list of agent] - a list of agents
         update_freq[int] - the frequency to update qnet_target in training
 
-    The training schema is:
-        1. each agent randomly picks action at the very begining until it has enough history
-        to construct game playing state representations, in this case, at least h=1 actions must be taken
-        2. feed the game playing state representation into qnet to select next action for each agent
-        3. construct partner selection state representations for each agent using states_for_i
-        4. feed the partner selection state representation into q_select to get the partner to play with
-        5. the reward is obtained via the interaction of agent and it's selected partner in the environment   
+    A modified version of train function implemented in train.py. This function freezes 
+    agents[1,:] whereas only apply model selection and game playing procedures on agent[0].
+    The goal is to see if the netwroks really help the agent to learn to select partner and 
+    play the game.
     '''
     # Variables for plotting purpose
     total_coop = []
@@ -161,6 +158,13 @@ def train(model, game_lr, select_lr, env, num_episodes, agents, update_freq, h=1
 
 
 def radnom_partner(qnet, env, agents, num_episodes, game_lr):
+    '''
+    Similar to train above, only agents[0] will act while other agents keed fixed.
+    However, the partner selection phase of agents[0] is random and only the game playing
+    phase is implemented. The goal of this function is to see the effect of partner selection
+    network(compared with train above) and whether the game playing network learns to select
+    actions.
+    '''
     game_optimizer = torch.optim.Adam(qnet.parameters(), game_lr)
     qnet_target = copy.deepcopy(qnet)
     curr_agent = agents[0]   
@@ -277,6 +281,84 @@ def radnom_partner(qnet, env, agents, num_episodes, game_lr):
     plt.legend()
     plt.savefig('figures\plot_random.png')
 
+
+def pure_random(env, agents, num_episodes):
+    '''
+    Implemented a pure random game playing and partner selection phase for
+    agent[0], also the other agents are fixed. 
+    '''
+    curr_agent = agents[0]   
+    total_reward = [] 
+    total_mutual_coop = []
+    total_mutual_deft = [] 
+    total_exploitation = []
+    total_deception = []
+    for j in range(num_episodes):
+        num_rand = random.random()
+        init_actions = [0] 
+        round_count = 0
+        episodic_reward = 0
+        num_mutual_coop = 0
+        num_mutual_deft = 0
+        num_exploitation = 0
+        num_deception = 0
+        while num_rand < CONT_PROP:
+            round_count += 1
+            round_states = []
+            round_next_states = [] 
+            init_actions[0] += 1
+            # Randomly select an partner and action
+            partner_id = np.random.randint(1, NUM_AGENTS)
+            partner = agents[partner_id]
+            curr_agent_act = np.random.randint(2)
+            curr_agent.action = curr_agent_act
+            env.set_agents(curr_agent, partner)
+            env.set_action(curr_agent_act, partner.action)
+            reward = env.step()
+            episodic_reward += reward[0]
+
+            if curr_agent.action == 0 and partner.action == 0:
+                num_mutual_coop += 1
+
+            elif curr_agent.action == 1 and partner.action == 1:
+                num_mutual_deft += 1
+
+            elif curr_agent.action == 1 and partner.action == 0:
+                num_exploitation += 1
+
+            else:
+                num_deception += 1 
+            
+            if round_count > T:
+                break
+        mean_episodic_reward = episodic_reward / (round_count+1)
+        normalizer = NUM_AGENTS
+        total_reward.append(mean_episodic_reward)  
+        total_mutual_coop.append(num_mutual_coop/normalizer)
+        total_mutual_deft.append(num_mutual_deft/normalizer)
+        total_exploitation.append(num_exploitation/normalizer)
+        total_deception.append(num_deception/normalizer)
+
+    # Plotting  
+    plot_reward = plt.figure(1)  
+    plt.plot(total_reward, alpha=0.5)
+    plt.xlabel('num_of_episodes')
+    plt.ylabel('episodic reward')
+    plt.savefig('figures\pure_random_reward.png')
+
+    plot2 = plt.figure(2)
+    plt.plot(total_mutual_coop, color = 'red', alpha = 0.5, label='mutual_coop')
+    plt.plot(total_mutual_deft, color = 'green', alpha = 0.5, label='mutual_defect')
+    plt.plot(total_deception, color='blue', alpha = 0.5, label='deception')
+    plt.plot(total_exploitation, color='orange', alpha = 0.5, label='exploitation')
+    #plt.plot(total_reward, color='purple', alpha = 0.5, label='total reward')
+    plt.ylabel('interactions')
+    plt.xlabel('iterations')
+    plt.legend()
+    plt.savefig('figures\pure_random.png')
+
+
+
 parser = argparse.ArgumentParser()
 
 ## General parameters
@@ -292,8 +374,8 @@ parser.add_argument("--update_freq", type=int, default=15,
 parser.add_argument("--replay_capacity", type=int, default=100,
                     help="the size of agent's replay buffer")
 
-parser.add_argument("--is_random", type=bool, default=False,
-                    help="whether to do random partner selection")                    
+parser.add_argument("--is_random", type=int, default=1,
+                    help="which partner and action selection pattern to choose")                    
                
 
 if __name__ == "__main__":
@@ -327,15 +409,18 @@ if __name__ == "__main__":
     env = PrisonerEnv(agent1, agent2, reward)
 
     def run_experiment(is_random):
-        if not is_random:
+        if is_random == 1:
             model = CoumpoundNet(NUM_AGENTS, 2, 1, 256, 256)
             train(model, game_lr, select_lr, env, 1000, agents, update_freq) 
             print('Done!') 
     
-        else:
+        elif is_random == 2:
             qnet = DQN(NUM_AGENTS, 2, 256, 1)
             radnom_partner(qnet, env, agents, 1000, game_lr) 
             print('Done!')
+        
+        else:
+            pure_random(env, agents, 1000)    
 
     run_experiment(is_random)        
 
