@@ -16,11 +16,11 @@ import copy
 # https://www.aaai.org/Papers/AAAI/2020GB/AAAI-AnastassacosN.1598.pdf
 # as a baseline approach 
 
-NUM_AGENTS = 20
-BATCH_SIZE = 16
+NUM_AGENTS = 4
+BATCH_SIZE = 64
 CONT_PROP = 0.95  
 GAMMA = 0.99
-T = 10
+T = 50
 TAU = 0.005
 
 def states_for_i(actions, i):
@@ -77,7 +77,7 @@ class CoumpoundNet(nn.Module):
         self.qnet_target = copy.deepcopy(self.qnet)
         self.q_select = DQNSelect(num_agents, num_time_steps, hidden_dim2)       
 
-def train(model, lr, env, num_episodes, agents, update_freq, h=1):
+def train(model, game_lr, select_lr, env, num_episodes, agents, update_freq, h=1):
     '''
     Args:
         model[list of CompoundNet] - a list of models, each agent has it's own decision making
@@ -113,8 +113,8 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
     game_optimizers = [None] * len(agents)
     partner_optimizers = [None] * len(agents)
     for i in range(len(agents)):
-        game_optimizers[i] = torch.optim.Adam(model[i].qnet.parameters(), lr)
-        partner_optimizers[i] = torch.optim.Adam(model[i].q_select.parameters(), lr)
+        game_optimizers[i] = torch.optim.Adam(model[i].qnet.parameters(), game_lr)
+        partner_optimizers[i] = torch.optim.Adam(model[i].q_select.parameters(), select_lr)
     for j in range(num_episodes):
         rand_num = random.random()
         round_count = 0
@@ -123,18 +123,20 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
 
         while rand_num < CONT_PROP:
             round_count += 1
-            action = []
-            round_states = []
-            round_next_states = [] 
-
+            
             num_coop = 0
             num_mutual_coop = 0
             num_mutual_deft = 0
             num_deception = 0
             num_exploitation = 0 
-            avg_reward = 0            
+            avg_reward = 0   
+
+            action = []
+            round_states = []
+            round_next_states = []         
 
             for i in range(NUM_AGENTS):
+                 
                 # This part encode the game playing phase
                 # Collect past h actions
                 init_actions[i] += 1
@@ -153,10 +155,9 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
       
                 q_val = model[i].qnet(s_i) 
                 a_d = model[i].qnet.select_action(q_val)
-   
                 # Store next states and next actions for each agent
-                next_s = a_d.detach().numpy().reshape(1,-1)
-                             
+                next_s = a_d.reshape(1,-1)
+            
                 action.append(a_d)
                 round_states.append(s_i)
                 round_next_states.append(next_s)            
@@ -166,13 +167,12 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
                 # ns_i has shape [1, (num_agents-1)*2*h]
                 ns_i = states_for_i(action, i)
                 logits = model[i].q_select(ns_i)
- 
                 # Partner selection
-                a_s = model[i].q_select.select_partner(logits)
-                partner = agents[torch.argmax(a_s)]
+                partner_id, a_s = model[i].q_select.select_partner(i, logits)
+                partner = agents[partner_id]
                 # Agent i and it's selected partner play against each other in the environment
                 env.set_agents(agents[i], partner)
-                act1, act2 = onehot_to_int(action[i], action[torch.argmax(a_s)])
+                act1, act2 = onehot_to_int(action[i], action[partner_id])
                 env.set_action(act1, act2)           
                 reward = env.step()
                 # Add game playing histories s, a, s', r to the replay buffer 
@@ -181,6 +181,8 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
                 agents[i].replay.add(ns_i, a_s, 0, 0, select_phase=True)
             
                 s_state, s_action, s_reward, g_state, g_action, g_next_state, g_reward= agents[i].replay.sample(BATCH_SIZE)
+                g_action = torch.argmax(g_action, dim=1)   
+                s_action = torch.argmax(s_action, dim=1)
                 #print('agent {}'.format(i), agents[i].memory)              
                 if agents[i].memory[-1]== [[1.0,0.0]]:
                     num_coop += 1
@@ -207,27 +209,25 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
                 # Training Q-net for game playing phase
                 with torch.no_grad():
                     target = g_reward+ GAMMA*torch.max(model[i].qnet_target(g_next_state), dim=1, keepdim=True)[0]   
-                curr_qval = model[i].qnet(g_state).gather(1,g_action.type(torch.LongTensor))
+                curr_qval = model[i].qnet(g_state).gather(1,g_action.unsqueeze(1))
                 loss = F.mse_loss(curr_qval, target)
                 game_optimizers[i].zero_grad()
-                loss.backward(retain_graph=True)
+                loss.backward()
                 game_optimizers[i].step()                
 
                 # Training Q-select for partner selection phase
                 with torch.no_grad():
                     target = s_reward+ GAMMA*torch.max(model[i].qnet_target(g_state), dim=1, keepdim=True)[0]
-                curr_qval = model[i].q_select(s_state).gather(1,s_action.type(torch.LongTensor))
+                curr_qval = model[i].q_select(s_state).gather(1,s_action.unsqueeze(1))
                 loss = F.mse_loss(curr_qval, target)
                 partner_optimizers[i].zero_grad()
-                loss.backward(retain_graph=True)
+                loss.backward()
                 partner_optimizers[i].step()
-                # Update game playing target network
-                if round_count % update_freq == 0:
-                    # Polyak target average
-                    for param, target_param in zip(model[i].qnet.parameters(), model[i].qnet_target.parameters()):
-                        target_param.data.copy_(TAU * param.data + (1-TAU) * target_param.data)
-		                
-                    #model[i].qnet_target.load_state_dict(model[i].qnet.state_dict())
+
+
+                # Polyak target average
+                for param, target_param in zip(model[i].qnet.parameters(), model[i].qnet_target.parameters()):
+                    target_param.data.copy_(TAU * param.data + (1-TAU) * target_param.data)
             
             if round_count >= T:
                 break
@@ -265,11 +265,17 @@ def train(model, lr, env, num_episodes, agents, update_freq, h=1):
 parser = argparse.ArgumentParser()
 
 ## General parameters
-parser.add_argument("--lr", type=float, default=0.001,
-                    help="learning rate ")
+parser.add_argument("--game_lr", type=float, default=0.01,
+                    help="game playing learning rate ")
 
-parser.add_argument("--update_freq", type=int, default=5,
+parser.add_argument("--select_lr", type=float, default=0.001,
+                    help="partner selection learning rate ")                    
+
+parser.add_argument("--update_freq", type=int, default=15,
                     help="number of iterations to update the policy network") 
+
+parser.add_argument("--replay_capacity", type=int, default=100,
+                    help="the size of agent's replay buffer")                    
 
 #parser.add_argument("batch_size", type=int, default=16,
 #                    help="the training batch size")  
@@ -285,13 +291,15 @@ parser.add_argument("--update_freq", type=int, default=5,
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    lr = args.lr
+    game_lr = args.game_lr
+    select_lr = args.select_lr
     update_freq = args.update_freq
+    replay_capacity = args.replay_capacity
     actions = [0, 1]
     agents = []
     for i in range(NUM_AGENTS):
         action = random.choice(actions)
-        agent = Agent(action,5,1,2,NUM_AGENTS)
+        agent = Agent(action,replay_capacity,1,2,NUM_AGENTS)
         agents.append(agent)
     models = []
     reward = {(0,0):[3,3],(0,1):[0,4],(1,0):[4,0],(1,1):[1,1]}
@@ -305,5 +313,5 @@ if __name__ == "__main__":
     env = PrisonerEnv(agent1, agent2, reward)
     for i in range(len(agents)):
         models.append(CoumpoundNet(NUM_AGENTS, 2, 1, 256, 256))
-    train(models, lr, env, 2500, agents, update_freq) 
+    train(models, game_lr, select_lr, env, 250, agents, update_freq) 
     print('Done!')   

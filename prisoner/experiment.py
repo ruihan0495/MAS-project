@@ -112,12 +112,13 @@ def train(model, game_lr, select_lr, env, num_episodes, agents, update_freq, h=1
             agents[0].replay.add(ns_i, a_s, 0, 0, select_phase=True)
         
             s_state, s_action, s_reward, g_state, g_action, g_next_state, g_reward= agents[0].replay.sample(BATCH_SIZE)
-               
+            g_action = torch.argmax(g_action, dim=1)   
+            s_action = torch.argmax(s_action, dim=1)
 
             # Training Q-net for game playing phase
             with torch.no_grad():
                 target = g_reward+ GAMMA*torch.max(model.qnet_target(g_next_state), dim=1, keepdim=True)[0]   
-            curr_qval = model.qnet(g_state).gather(1,g_action.type(torch.LongTensor))
+            curr_qval = model.qnet(g_state).gather(1,g_action.unsqueeze(1))
             loss = F.mse_loss(curr_qval, target)
             game_optimizer.zero_grad()
             loss.backward()
@@ -126,7 +127,7 @@ def train(model, game_lr, select_lr, env, num_episodes, agents, update_freq, h=1
             # Training Q-select for partner selection phase
             with torch.no_grad():
                 target = s_reward+ GAMMA*torch.max(model.qnet_target(g_state), dim=1, keepdim=True)[0]
-            curr_qval = model.q_select(s_state).gather(1,s_action.type(torch.LongTensor))
+            curr_qval = model.q_select(s_state).gather(1,s_action.unsqueeze(1))
             loss = F.mse_loss(curr_qval, target)
             partner_optimizer.zero_grad()
             loss.backward()
@@ -196,6 +197,7 @@ def radnom_partner(qnet, env, agents, num_episodes, game_lr):
 
             curr_agent.remember(action_n)
             s_i = curr_agent.state()
+            #print('current state ', s_i)
             # Convert to type float
             s_i = s_i.type(torch.FloatTensor).reshape(1,-1)
     
@@ -203,7 +205,7 @@ def radnom_partner(qnet, env, agents, num_episodes, game_lr):
             a_d = qnet.select_action(q_val)
             # Store next states and next actions for each agent
             next_s = a_d.reshape(1,-1)
-
+            #print('next state ', next_s)
             round_states.append(s_i)
             round_next_states.append(next_s) 
 
@@ -239,12 +241,15 @@ def radnom_partner(qnet, env, agents, num_episodes, game_lr):
             agents[0].replay.add(0,0, 0, 0, select_phase=True)
         
             _, _, _, g_state, g_action, g_next_state, g_reward= agents[0].replay.sample(BATCH_SIZE)
-            env.set_action(curr_agent.action, partner.action)
+            g_action = torch.argmax(g_action, dim=1)
             num_rand = random.random()
 
             with torch.no_grad():
-                target = g_reward+ GAMMA*torch.max(qnet_target(g_next_state), dim=1, keepdim=True)[0]   
-            curr_qval = qnet(g_state).gather(1,g_action.type(torch.LongTensor))
+                target = g_reward+ GAMMA*torch.max(qnet_target(g_next_state), dim=1, keepdim=True)[0] 
+                #print('target:', target)
+                #print('target shape ',target.shape)  
+            curr_qval = qnet(g_state).gather(1,g_action.unsqueeze(1))
+            #print('curr qval ',curr_qval)
             loss = F.mse_loss(curr_qval, target)
             game_optimizer.zero_grad()
             loss.backward()
