@@ -131,6 +131,7 @@ def train(model, game_lr, select_lr, env, num_episodes, agents, update_freq, h=1
             num_exploitation = 0 
             avg_reward = 0   
 
+            prev_action = []
             action = []
             round_states = []
             round_next_states = []         
@@ -143,7 +144,7 @@ def train(model, game_lr, select_lr, env, num_episodes, agents, update_freq, h=1
                 curr_agent = agents[i]
                 # If initially less then h, act randomly; else the next action is picked by qnet with epsilon-greedy policy
                 if init_actions[i] <= 1:
-                    action_n = F.one_hot(torch.randint(2,(1,)), num_classes=2)
+                    action_n = F.one_hot(torch.randint(2,(1,)), num_classes=2).type(torch.FloatTensor)
                 else:
                     action_n = a_d
 
@@ -157,7 +158,8 @@ def train(model, game_lr, select_lr, env, num_episodes, agents, update_freq, h=1
                 a_d = model[i].qnet.select_action(q_val)
                 # Store next states and next actions for each agent
                 next_s = a_d.reshape(1,-1)
-            
+                #prev_action.append(action_n)
+                prev_action.append(action_n)
                 action.append(a_d)
                 round_states.append(s_i)
                 round_next_states.append(next_s)            
@@ -165,22 +167,26 @@ def train(model, game_lr, select_lr, env, num_episodes, agents, update_freq, h=1
             for i in range(NUM_AGENTS):
                 # Collect states for all other agents excludes itself
                 # ns_i has shape [1, (num_agents-1)*2*h]
-                ns_i = states_for_i(action, i)
+                ns_i = states_for_i(prev_action, i)
                 logits = model[i].q_select(ns_i)
                 # Partner selection
                 partner_id, a_s = model[i].q_select.select_partner(i, logits)
                 partner = agents[partner_id]
                 # Agent i and it's selected partner play against each other in the environment
                 env.set_agents(agents[i], partner)
+                act1, act2 = onehot_to_int(prev_action[i], prev_action[partner_id])
+                env.set_action(act1, act2)           
+                s_reward = env.step()
+
                 act1, act2 = onehot_to_int(action[i], action[partner_id])
                 env.set_action(act1, act2)           
-                reward = env.step()
+                g_reward = env.step()
                 # Add game playing histories s, a, s', r to the replay buffer 
-                agents[i].replay.add(round_states[i], action[i], round_next_states[i], reward[0])
+                agents[i].replay.add(round_states[i], action[i], round_next_states[i], g_reward[0])
                 # Add partner selction histories s, a to the replay buffer
-                agents[i].replay.add(ns_i, a_s, 0, 0, select_phase=True)
+                agents[i].replay.add(ns_i, a_s, 0, s_reward[0], select_phase=True)
             
-                s_state, s_action, s_reward, g_state, g_action, g_next_state, g_reward= agents[i].replay.sample(BATCH_SIZE)
+                s_state, s_action, _, g_state, g_action, g_next_state, g_reward= agents[i].replay.sample(BATCH_SIZE)
                 g_action = torch.argmax(g_action, dim=1)   
                 s_action = torch.argmax(s_action, dim=1)
                 #print('agent {}'.format(i), agents[i].memory)              
@@ -217,7 +223,7 @@ def train(model, game_lr, select_lr, env, num_episodes, agents, update_freq, h=1
 
                 # Training Q-select for partner selection phase
                 with torch.no_grad():
-                    target = s_reward+ GAMMA*torch.max(model[i].qnet_target(g_state), dim=1, keepdim=True)[0]
+                    target = g_reward+ GAMMA*torch.max(model[i].qnet_target(g_state), dim=1, keepdim=True)[0]
                 curr_qval = model[i].q_select(s_state).gather(1,s_action.unsqueeze(1))
                 loss = F.mse_loss(curr_qval, target)
                 partner_optimizers[i].zero_grad()
@@ -313,5 +319,5 @@ if __name__ == "__main__":
     env = PrisonerEnv(agent1, agent2, reward)
     for i in range(len(agents)):
         models.append(CoumpoundNet(NUM_AGENTS, 2, 1, 256, 256))
-    train(models, game_lr, select_lr, env, 250, agents, update_freq) 
+    train(models, game_lr, select_lr, env, 100, agents, update_freq) 
     print('Done!')   
